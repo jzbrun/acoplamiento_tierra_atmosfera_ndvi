@@ -1,0 +1,146 @@
+# =========================================================
+# 1. LIBRERÍAS
+# =========================================================
+library(rgee)
+library(sf)
+library(dplyr)
+library(LandsatTS)
+library(units)
+
+ee_Initialize(drive = TRUE)
+
+# =========================================================
+# 2. CARGA DE FEATURE COLLECTIONS (GEE ASSETS)
+# =========================================================
+
+bosque84 <- ee$FeatureCollection("projects/ee-juanluoni/assets/Bosque_1984")
+bosque05 <- ee$FeatureCollection("projects/ee-juanluoni/assets/Bosque_2005")
+bosque25 <- ee$FeatureCollection("projects/ee-juanluoni/assets/Bosque_2025")
+
+arb84 <- ee$FeatureCollection("projects/ee-juanluoni/assets/Arbustal_1984")
+arb05 <- ee$FeatureCollection("projects/ee-juanluoni/assets/Arbustal_2005")
+arb25 <- ee$FeatureCollection("projects/ee-juanluoni/assets/Arbustal_2025")
+
+pas84 <- ee$FeatureCollection("projects/ee-juanluoni/assets/Pastizal_1984")
+pas05 <- ee$FeatureCollection("projects/ee-juanluoni/assets/Pastizal_2005")
+pas25 <- ee$FeatureCollection("projects/ee-juanluoni/assets/Pastizal_2025")
+
+# =========================================================
+# 3. UNIFICAR SERIES TEMPORALES
+# =========================================================
+
+bosque   <- bosque84$merge(bosque05)$merge(bosque25)
+arbustal <- arb84$merge(arb05)$merge(arb25)
+pastizal <- pas84$merge(pas05)$merge(pas25)
+
+# =========================================================
+# 4. CONVERTIR A sf
+# =========================================================
+
+bosque_sf   <- ee_as_sf(bosque)
+arbustal_sf <- ee_as_sf(arbustal)
+pastizal_sf <- ee_as_sf(pastizal)
+
+# =========================================================
+# 5. CREAR PUNTOS CENTRALES + CLASE
+# =========================================================
+
+bosque_pts <- bosque_sf |>
+  st_point_on_surface() |>
+  mutate(cover = "Bosque")
+
+arbustal_pts <- arbustal_sf |>
+  st_point_on_surface() |>
+  mutate(cover = "Arbustal")
+
+pastizal_pts <- pastizal_sf |>
+  st_point_on_surface() |>
+  mutate(cover = "Pastizal")
+
+# =========================================================
+# 6. CREAR IDs CONSISTENTES (CLAVE)
+# =========================================================
+
+bosque_pts$sample_id   <- paste0("B_", seq_len(nrow(bosque_pts)))
+arbustal_pts$sample_id <- paste0("A_", seq_len(nrow(arbustal_pts)))
+pastizal_pts$sample_id <- paste0("P_", seq_len(nrow(pastizal_pts)))
+
+# =========================================================
+# 7. UNIR TODAS LAS MUESTRAS
+# =========================================================
+
+muestras <- bind_rows(bosque_pts, arbustal_pts, pastizal_pts)
+
+# =========================================================
+# 8. LIMPIEZA FINAL Y CONTROL
+# =========================================================
+
+muestras <- muestras |>
+  st_transform(4326) |>
+  select(sample_id, cover, geometry)
+
+stopifnot("sample_id" %in% names(muestras))
+
+# =========================================================
+# 9. (OPCIONAL) GUARDAR VECTOR LOCAL
+# =========================================================
+
+st_write(
+  muestras,
+  "Muestras_Cobertura.gpkg",
+  delete_dsn = TRUE
+)
+
+# =========================================================
+# 10. SEPARAR POR CLASE
+# =========================================================
+
+bosque_pts   <- filter(muestras, cover == "Bosque")
+arbustal_pts <- filter(muestras, cover == "Arbustal")
+pastizal_pts <- filter(muestras, cover == "Pastizal")
+
+# =========================================================
+# 11. EXPORTACIÓN LANDSAT TS (GEE)
+# =========================================================
+
+task_bosque <- lsat_export_ts(
+  pixel_coords_sf = bosque_pts,
+  sample_id_from = "sample_id",
+  start_date = "1984-01-01",
+  end_date   = "2025-12-31",
+  start_doy  = 1,
+  end_doy    = 365,
+  file_prefix = "Bosque",
+  drive_export_dir = "LandsatTS"
+)
+
+task_arbustal <- lsat_export_ts(
+  pixel_coords_sf = arbustal_pts,
+  sample_id_from = "sample_id",
+  start_date = "1984-01-01",
+  end_date   = "2025-12-31",
+  start_doy  = 1,
+  end_doy    = 365,
+  file_prefix = "Arbustal",
+  drive_export_dir = "LandsatTS"
+)
+
+task_pastizal <- lsat_export_ts(
+  pixel_coords_sf = pastizal_pts,
+  sample_id_from = "sample_id",
+  start_date = "1984-01-01",
+  end_date   = "2025-12-31",
+  start_doy  = 1,
+  end_doy    = 365,
+  file_prefix = "Pastizal",
+  drive_export_dir = "LandsatTS"
+)
+
+# =========================================================
+# 12. MONITOREO
+# =========================================================
+
+ee_monitoring(task_bosque)
+ee_monitoring(task_arbustal)
+ee_monitoring(task_pastizal)
+
